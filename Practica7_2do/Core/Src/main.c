@@ -20,7 +20,7 @@
 #include "fatfs_sd.h"
 #include "string.h"
 #include "stdio.h"
-//#include <stdlib.h>
+#include <stdlib.h>
 
 
 /* USER CODE END Includes */
@@ -57,18 +57,25 @@ UART_HandleTypeDef huart2;
 /* USER CODE BEGIN PV */
 
 uint8_t rx_data[1]; // Solo para recibir byte por byte
+char rx_buffer[500];  // Buffer de recepción
 uint8_t activa = 0, activa1 = 0;
 
-#define MAX_FILES 10
-#define FILENAME_MAX_LEN 50
+#define MAX_FILES 70    //Cantidad máxima de archivos permitidos
+#define FILENAME_MAX_LEN 50    //Cantidad máxima de carcateres permitidos por nombre
 
 char file_list[MAX_FILES][FILENAME_MAX_LEN];  // Lista de archivos
 int file_count = 0;  // Número de archivos
+
+FIL fil;  // Archivo
+char file_name[50];  // Nombre del archivo
+int receiving_file = 0;  // Flag para indicar si estamos recibiendo un archivo
+FRESULT fres;
 
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
+void write_to_sd(char *data);
 void transmit_uart(char *string);
 void read_file_by_index(int index);
 static void MX_GPIO_Init(void);
@@ -240,7 +247,7 @@ int main(void)
 
 	  }
 
-	   if(activa == 4){
+	   if(activa == 4){      //Si se desea montar la SD
 		   // Montar SD
 		     fres = f_mount(&fs,"/" , 0);
 		     if(fres == FR_OK){
@@ -251,6 +258,11 @@ int main(void)
 		     activa = 0;
 		    activa1 = 0;
 
+	   }
+
+	   if(activa == 5){   //Si se desea escribir un nuevo archivo en la SD
+		   receiving_file = 1;
+		   HAL_UART_Transmit(&huart2, (uint8_t*)"Ready to receive file\n", 22, HAL_MAX_DELAY);
 	   }
 
 
@@ -410,29 +422,78 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 
 	 if (huart->Instance == USART2) // Verificar si la interrupción es de UART2
 	  {
-		 if (rx_data[0] == 'A'){
-			 activa = 1;
-		 }
 
-		 else if (rx_data[0] == 'B'){
-			 activa = 2;
+		 if(activa != 5){         //Activar o desactivar funcionamiento normal
 
-		 }
+			 if (rx_data[0] == 'A'){
+				 activa = 1;
+			 }
 
-		 else if (rx_data[0] == 'C'){
-			 activa = 3;
+			 else if (rx_data[0] == 'B'){
+				 activa = 2;
+
+			 }
+
+			 else if (rx_data[0] == 'C'){
+				 activa = 3;
+
+					}
+
+			 else if (rx_data[0] == 'D'){
+					activa = 4;
 
 				}
 
-		 else if (rx_data[0] == 'D'){
-					 activa = 4;
+			 else if (rx_data[0] == 'E'){
+					activa = 5;
 
-				}
-		 else{
-			 activa1 = atoi((char*)rx_data);  // Usa un cast a char*
+
+			 }
+
+			 else {
+				 activa1 = atoi((char*)rx_data);  // Usa un cast a char*
+
+			 }
+		 }
+
+
+
+		 else  if(activa == 5){
+
+
+			 // Recibir el nombre del archivo
+			  if (receiving_file == 1) {
+				 strcpy(file_name, rx_data);  // Guardar el nombre del archivo
+				 fres = f_open(&fil, file_name, FA_CREATE_ALWAYS | FA_WRITE);
+				 if (fres == FR_OK) {
+					 HAL_UART_Transmit(&huart2, (uint8_t*)"File opened\n", 12, HAL_MAX_DELAY);
+					 receiving_file = 2;  // Cambiar el estado para empezar a recibir contenido
+				 } else {
+					 HAL_UART_Transmit(&huart2, (uint8_t*)"Error opening file\n", 20, HAL_MAX_DELAY);
+				 }
+			 }
+			 // Recibir y escribir contenido en la SD
+			 else if (receiving_file == 2) {
+				 if (strcmp(rx_data, "EOF") == 0) {
+					 // Final de archivo
+					 f_close(&fil);
+					 HAL_UART_Transmit(&huart2, (uint8_t*)"File saved and closed\n", 23, HAL_MAX_DELAY);
+					 receiving_file = 0;  // Terminar recepción de archivo
+				 } else {
+					 // Escribir en el archivo
+					 write_to_sd(rx_data);
+				 }
+				 activa = 0;
+			 }
+
 
 		 }
+
+
+
 	  }
+
+
 
 	 // Volver a habilitar la recepción por UART2
 	    HAL_UART_Receive_IT(&huart2, rx_data, 1);
@@ -457,8 +518,21 @@ void read_file_by_index(int index) {
     } else {
         transmit_uart("Invalid file index\n");
     }
+
+
+
 }
 
+
+
+// Función para escribir el archivo en la SD
+void write_to_sd(char *data) {
+    fres = f_puts(data, &fil);
+    if (fres < 0) {
+        // Error escribiendo en la SD
+        HAL_UART_Transmit(&huart2, (uint8_t*)"Error writing to file\n", 22, HAL_MAX_DELAY);
+    }
+}
 
 
 /* USER CODE END 4 */
